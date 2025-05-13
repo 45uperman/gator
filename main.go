@@ -10,6 +10,7 @@ import (
 
 	"github.com/45uperman/gator/internal/config"
 	"github.com/45uperman/gator/internal/database"
+	"github.com/45uperman/gator/internal/feed"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
@@ -72,6 +73,9 @@ func main() {
 	c.register("register", handlerRegister)
 	c.register("reset", handlerReset)
 	c.register("users", handlerUsers)
+	c.register("agg", handlerAgg)
+	c.register("addfeed", handlerAddFeed)
+	c.register("feeds", handlerFeeds)
 
 	if len(os.Args) < 2 {
 		log.Fatal("error: no command given")
@@ -181,6 +185,83 @@ func handlerUsers(s *state, cmd command) error {
 			fmt.Print(" (current)")
 		}
 		fmt.Print("\n")
+	}
+
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	newFeed, err := feed.FetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+	if err != nil {
+		return err
+	}
+	newFeed.Unescape()
+
+	fmt.Println(*newFeed)
+
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return fmt.Errorf("addfeed requires the name and url of the feed to be added as arguments")
+	}
+
+	current_user, err := s.db.GetUser(context.Background(), sql.NullString{String: s.cfg.CurrentUserName, Valid: true})
+	if err != nil {
+		return err
+	}
+
+	f, err := s.db.CreateFeed(
+		context.Background(),
+		database.CreateFeedParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Name:      sql.NullString{String: cmd.args[0], Valid: true},
+			Url:       sql.NullString{String: cmd.args[1], Valid: true},
+			UserID:    uuid.NullUUID{UUID: current_user.ID, Valid: true},
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf(
+		"ID: %v\nCreatedAt: %v\nUpdatedAt: %v\nName: %v\nUrl: %v\nUserId: %v\n",
+		f.ID,
+		f.CreatedAt,
+		f.UpdatedAt,
+		f.Name,
+		f.Url,
+		f.UserID,
+	)
+
+	return nil
+}
+
+func handlerFeeds(s *state, cmd command) error {
+	feeds, err := s.db.GetFeeds(context.Background())
+	if err != nil {
+		return err
+	}
+
+	for _, f := range feeds {
+		feedOwner, err := s.db.GetUserByID(context.Background(), f.UserID.UUID)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("\nFeed '%s' added by user '%s'\n\n", f.Name.String, feedOwner.Name.String)
+		fmt.Printf(
+			"  ID: %v\n  CreatedAt: %v\n  UpdatedAt: %v\n  Name: %v\n  Url: %v\n  UserId: %v\n\n",
+			f.ID,
+			f.CreatedAt,
+			f.UpdatedAt,
+			f.Name,
+			f.Url,
+			f.UserID,
+		)
 	}
 
 	return nil
