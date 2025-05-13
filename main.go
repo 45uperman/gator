@@ -71,6 +71,7 @@ func main() {
 	c.register("login", handlerLogin)
 	c.register("register", handlerRegister)
 	c.register("reset", handlerReset)
+	c.register("users", handlerUsers)
 
 	if len(os.Args) < 2 {
 		log.Fatal("error: no command given")
@@ -163,6 +164,23 @@ func handlerReset(s *state, cmd command) error {
 	err := s.db.ResetUsers(context.Background())
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func handlerUsers(s *state, cmd command) error {
+	users, err := s.db.GetUsers(context.Background())
+	if err != nil {
+		return err
+	}
+
+	for _, user := range users {
+		fmt.Printf("* %s", user.Name.String)
+		if user.Name.String == s.cfg.CurrentUserName {
+			fmt.Print(" (current)")
+		}
+		fmt.Print("\n")
 	}
 
 	return nil
