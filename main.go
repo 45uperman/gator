@@ -71,7 +71,7 @@ func main() {
 
 	c.register("login", handlerLogin)
 	c.register("register", handlerRegister)
-	c.register("reset", handlerReset)
+	c.register("reset 51420251734", handlerReset)
 	c.register("users", handlerUsers)
 	c.register("agg", handlerAgg)
 	c.register("addfeed", middlewareLoggedIn(handlerAddFeed))
