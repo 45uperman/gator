@@ -74,8 +74,10 @@ func main() {
 	c.register("reset", handlerReset)
 	c.register("users", handlerUsers)
 	c.register("agg", handlerAgg)
-	c.register("addfeed", handlerAddFeed)
+	c.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	c.register("feeds", handlerFeeds)
+	c.register("follow", middlewareLoggedIn(handlerFollow))
+	c.register("following", middlewareLoggedIn(handlerFollowing))
 
 	if len(os.Args) < 2 {
 		log.Fatal("error: no command given")
@@ -101,12 +103,10 @@ func handlerLogin(s *state, cmd command) error {
 		return fmt.Errorf("login requires a username to log in as")
 	}
 
-	username := sql.NullString{String: cmd.args[0], Valid: true}
-
-	_, err := s.db.GetUser(context.Background(), username)
+	_, err := s.db.GetUser(context.Background(), cmd.args[0])
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("cannot log in as user with name %s because that user does not exist", username.String)
+			return fmt.Errorf("cannot log in as user with name %s because that user does not exist", cmd.args[0])
 		}
 		return err
 	}
@@ -126,15 +126,13 @@ func handlerRegister(s *state, cmd command) error {
 		return fmt.Errorf("register requires a username to register")
 	}
 
-	username := sql.NullString{String: cmd.args[0], Valid: true}
-
-	_, err := s.db.GetUser(context.Background(), username)
+	_, err := s.db.GetUser(context.Background(), cmd.args[0])
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return err
 		}
 	} else {
-		return fmt.Errorf("cannot create user with name %s because that user already exists", username.String)
+		return fmt.Errorf("cannot create user with name %s because that user already exists", cmd.args[0])
 	}
 
 	u, err := s.db.CreateUser(
@@ -143,18 +141,18 @@ func handlerRegister(s *state, cmd command) error {
 			ID:        uuid.New(),
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
-			Name:      username,
+			Name:      cmd.args[0],
 		},
 	)
 	if err != nil {
 		return err
 	}
 
-	s.cfg.SetUser(username.String)
-	fmt.Printf("successfully created user: %s\n", username.String)
+	s.cfg.SetUser(cmd.args[0])
+	fmt.Printf("\nsuccessfully created user: %s\n\n", cmd.args[0])
 
 	fmt.Printf(
-		"ID: %v\n  CreatedAt: %v\n  UpdatedAt: %v\n  Name: %v\n",
+		"  ID: %v\n  CreatedAt: %v\n  UpdatedAt: %v\n  Name: %v\n\n",
 		u.ID,
 		u.CreatedAt,
 		u.UpdatedAt,
@@ -180,8 +178,8 @@ func handlerUsers(s *state, cmd command) error {
 	}
 
 	for _, user := range users {
-		fmt.Printf("* %s", user.Name.String)
-		if user.Name.String == s.cfg.CurrentUserName {
+		fmt.Printf("* %s", user.Name)
+		if user.Name == s.cfg.CurrentUserName {
 			fmt.Print(" (current)")
 		}
 		fmt.Print("\n")
@@ -202,14 +200,9 @@ func handlerAgg(s *state, cmd command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return fmt.Errorf("addfeed requires the name and url of the feed to be added as arguments")
-	}
-
-	current_user, err := s.db.GetUser(context.Background(), sql.NullString{String: s.cfg.CurrentUserName, Valid: true})
-	if err != nil {
-		return err
 	}
 
 	f, err := s.db.CreateFeed(
@@ -218,17 +211,32 @@ func handlerAddFeed(s *state, cmd command) error {
 			ID:        uuid.New(),
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
-			Name:      sql.NullString{String: cmd.args[0], Valid: true},
-			Url:       sql.NullString{String: cmd.args[1], Valid: true},
-			UserID:    uuid.NullUUID{UUID: current_user.ID, Valid: true},
+			Name:      cmd.args[0],
+			Url:       cmd.args[1],
+			UserID:    user.ID,
 		},
 	)
 	if err != nil {
 		return err
 	}
 
+	_, err = s.db.CreateFeedFollow(
+		context.Background(),
+		database.CreateFeedFollowParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			UserID:    user.ID,
+			FeedID:    f.ID,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nsuccessfully added feed: %s\n\n", f.Name)
 	fmt.Printf(
-		"ID: %v\nCreatedAt: %v\nUpdatedAt: %v\nName: %v\nUrl: %v\nUserId: %v\n",
+		"  ID: %v\n  CreatedAt: %v\n  UpdatedAt: %v\n  Name: %v\n  Url: %v\n  UserId: %v\n\n",
 		f.ID,
 		f.CreatedAt,
 		f.UpdatedAt,
@@ -247,12 +255,12 @@ func handlerFeeds(s *state, cmd command) error {
 	}
 
 	for _, f := range feeds {
-		feedOwner, err := s.db.GetUserByID(context.Background(), f.UserID.UUID)
+		feedOwner, err := s.db.GetUserByID(context.Background(), f.UserID)
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("\nFeed '%s' added by user '%s'\n\n", f.Name.String, feedOwner.Name.String)
+		fmt.Printf("\nFeed '%s' added by user '%s'\n\n", f.Name, feedOwner.Name)
 		fmt.Printf(
 			"  ID: %v\n  CreatedAt: %v\n  UpdatedAt: %v\n  Name: %v\n  Url: %v\n  UserId: %v\n\n",
 			f.ID,
@@ -265,4 +273,66 @@ func handlerFeeds(s *state, cmd command) error {
 	}
 
 	return nil
+}
+
+func handlerFollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("follow requires the url of the feed to be followed as an argument")
+	}
+
+	f, err := s.db.GetFeedByURL(
+		context.Background(),
+		cmd.args[0],
+	)
+	if err != nil {
+		return err
+	}
+
+	record, err := s.db.CreateFeedFollow(
+		context.Background(),
+		database.CreateFeedFollowParams{
+			ID:        uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			UserID:    user.ID,
+			FeedID:    f.ID,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Feed '%s' followed by user '%s'\n", record.FeedName, record.UserName)
+
+	return nil
+}
+
+func handlerFollowing(s *state, cmd command, user database.User) error {
+	follows, err := s.db.GetFeedFollowsForUser(
+		context.Background(),
+		user.Name,
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, feed := range follows {
+		fmt.Println(feed.FeedName)
+	}
+
+	return nil
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		current_user, err := s.db.GetUser(
+			context.Background(),
+			s.cfg.CurrentUserName,
+		)
+		if err != nil {
+			return err
+		}
+
+		return handler(s, cmd, current_user)
+	}
 }
