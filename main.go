@@ -79,6 +79,7 @@ func main() {
 	c.register("follow", middlewareLoggedIn(handlerFollow))
 	c.register("following", middlewareLoggedIn(handlerFollowing))
 	c.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	c.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	if len(os.Args) < 2 {
 		log.Fatal("error: no command given")
@@ -203,13 +204,11 @@ func handlerAgg(s *state, cmd command) error {
 
 	ticker := time.NewTicker(timeBetweenReps)
 	for ; ; <-ticker.C {
-		err := scrapeFeeds(s)
+		err := feed.ScrapeFeeds(s.db)
 		if err != nil {
 			return err
 		}
 	}
-
-	return nil
 }
 
 func handlerAddFeed(s *state, cmd command, user database.User) error {
@@ -337,7 +336,7 @@ func handlerFollowing(s *state, cmd command, user database.User) error {
 
 func handlerUnfollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 1 {
-		return fmt.Errorf("unfollow requires the url of the feed to be unfollowed as an arrgument")
+		return fmt.Errorf("unfollow requires the url of the feed to be unfollowed as an argument")
 	}
 
 	feedID, err := s.db.UnfollowUserFromFeed(
@@ -366,6 +365,38 @@ func handlerUnfollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.args) != 0 {
+		_, err := fmt.Sscanf(cmd.args[0], "%d", &limit)
+		if err != nil {
+			return fmt.Errorf("browse takes an integer as an optional argument, not '%s'", cmd.args[0])
+		}
+	}
+
+	posts, err := s.db.GetPostsForUser(
+		context.Background(),
+		database.GetPostsForUserParams{
+			UserID: user.ID,
+			Limit:  int32(limit),
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		f, err := s.db.GetFeed(context.Background(), post.FeedID)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("%s - '%s'\n", f.Name, post.Title.String)
+	}
+
+	return nil
+}
+
 func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
 	return func(s *state, cmd command) error {
 		current_user, err := s.db.GetUser(
@@ -378,36 +409,4 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 
 		return handler(s, cmd, current_user)
 	}
-}
-
-func scrapeFeeds(s *state) error {
-	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
-	if err != nil {
-		return err
-	}
-
-	err = s.db.MarkFeedFetched(
-		context.Background(),
-		database.MarkFeedFetchedParams{
-			LastFetchedAt: sql.NullTime{Time: time.Now(), Valid: true},
-			ID:            nextFeed.ID,
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	rssFeed, err := feed.FetchFeed(context.Background(), nextFeed.Url)
-	if err != nil {
-		return err
-	}
-	rssFeed.Unescape()
-
-	fmt.Printf("Fetched feed: %s\n\n", nextFeed.Name)
-	for _, item := range rssFeed.Channel.Item {
-		fmt.Println(item.Title)
-	}
-	fmt.Printf("\n")
-
-	return nil
 }
